@@ -246,14 +246,16 @@ def main():
     
     args = parser.parse_args()
     
-    # 低显存模式覆盖参数
+    # 低显存模式覆盖参数 (6GB 显卡如 3060 Laptop)
     if args.low_memory:
         args.batch_size = 1
         args.gradient_accumulation = 16
-        args.max_length = 512
-        args.lora_r = 8
-        args.lora_alpha = 16
-        print("⚠️ 低显存模式已启用！")
+        args.max_length = 256  # 6GB 显存必须短
+        args.lora_r = 4        # 最小 rank
+        args.lora_alpha = 8
+        print("⚠️ 低显存模式已启用 (6GB)！")
+        print("  - max_length=256, lora_r=4")
+        print("  - 如果还是 OOM，试试关闭其他程序")
     
     print("=" * 50)
     print("QLoRA SFT 训练")
