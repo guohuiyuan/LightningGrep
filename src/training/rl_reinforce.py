@@ -26,6 +26,13 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+# 可选: wandb 日志
+try:
+    import wandb
+    HAS_WANDB = True
+except ImportError:
+    HAS_WANDB = False
+
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -51,6 +58,7 @@ class Trajectory:
     reward: float
     log_probs: List[torch.Tensor]  # 每个 token 的 log prob
     format_error: bool = False  # 是否有格式错误
+    kl_divergence: float = 0.0  # KL 散度 (相对于 reference policy)
     
 
 def compute_log_probs(
@@ -351,6 +359,45 @@ class RLTrainer:
         
         self.step = 0
         self.best_val_reward = 0.0
+        self.use_wandb = False
+        self.reward_history = []  # 用于 reward 归一化
+        self.debug_trajectories = []  # 保存最近的轨迹用于调试
+    
+    def init_wandb(self, project: str = "lightninggrep-rl", run_name: str = None):
+        """初始化 wandb 日志"""
+        if HAS_WANDB:
+            wandb.init(
+                project=project,
+                name=run_name or f"rl-{self.step}",
+                config={
+                    "learning_rate": self.learning_rate,
+                    "batch_size": self.batch_size,
+                    "num_rollouts": self.num_rollouts,
+                    "max_turns": self.max_turns,
+                    "temperature": self.temperature,
+                }
+            )
+            self.use_wandb = True
+            print("✓ WandB 日志已启用")
+        else:
+            print("⚠️ wandb 未安装，跳过日志")
+    
+    def normalize_rewards(self, rewards: List[float]) -> List[float]:
+        """归一化 rewards (running mean/std)"""
+        self.reward_history.extend(rewards)
+        # 保留最近 1000 个 rewards
+        self.reward_history = self.reward_history[-1000:]
+        
+        if len(self.reward_history) < 10:
+            return rewards
+        
+        mean = sum(self.reward_history) / len(self.reward_history)
+        std = (sum((r - mean) ** 2 for r in self.reward_history) / len(self.reward_history)) ** 0.5
+        
+        if std < 1e-8:
+            return rewards
+        
+        return [(r - mean) / (std + 1e-8) for r in rewards]
     
     def train_step(self, batch: List[Dict]) -> Dict:
         """单步训练"""
@@ -359,6 +406,7 @@ class RLTrainer:
         all_trajectories = []
         batch_rewards = []
         batch_tool_calls = []
+        format_errors = 0
         
         for item in batch:
             repo_path = self.repo_dir / item["repo"].replace("/", "_")
@@ -387,9 +435,14 @@ class RLTrainer:
                 all_trajectories.append(traj)
                 batch_rewards.append(traj.reward)
                 batch_tool_calls.append(traj.tool_calls_count)
+                if traj.format_error:
+                    format_errors += 1
         
         if not all_trajectories:
-            return {"loss": 0.0, "reward": 0.0, "tool_calls": 0.0}
+            return {"loss": 0.0, "reward": 0.0, "tool_calls": 0.0, "format_error_rate": 0.0}
+        
+        # 保存用于调试
+        self.debug_trajectories = all_trajectories[-10:]
         
         # 计算 loss
         loss = reinforce_loss(
@@ -402,16 +455,26 @@ class RLTrainer:
         # 反向传播
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         self.optimizer.step()
         
         self.step += 1
         
-        return {
+        metrics = {
             "loss": loss.item(),
             "reward": sum(batch_rewards) / len(batch_rewards),
+            "reward_max": max(batch_rewards),
+            "reward_min": min(batch_rewards),
             "tool_calls": sum(batch_tool_calls) / len(batch_tool_calls),
+            "format_error_rate": format_errors / len(all_trajectories),
+            "grad_norm": grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm,
         }
+        
+        # WandB 日志
+        if self.use_wandb:
+            wandb.log(metrics, step=self.step)
+        
+        return metrics
     
     @torch.no_grad()
     def evaluate(self, data: List[Dict], max_samples: int = 50) -> Dict:
@@ -536,6 +599,11 @@ def main():
     parser.add_argument("--max_turns", type=int, default=4, help="最大轮数")
     parser.add_argument("--temperature", type=float, default=0.7, help="采样温度")
     
+    # 调试参数
+    parser.add_argument("--wandb", action="store_true", help="启用 wandb 日志")
+    parser.add_argument("--debug", action="store_true", help="调试模式：打印轨迹")
+    parser.add_argument("--save_trajectories", type=str, default=None, help="保存轨迹到文件")
+    
     args = parser.parse_args()
     
     # 检查 GPU
@@ -606,11 +674,25 @@ def main():
         device=device,
     )
     
+    # 启用 wandb
+    if args.wandb:
+        trainer.init_wandb()
+    
+    # 调试模式
+    if args.debug:
+        trainer.debug_mode = True
+        print("⚠️ 调试模式已启用，将打印轨迹详情")
+    
     trainer.train(
         num_steps=args.num_steps,
         eval_every=100,
         save_every=200,
     )
+    
+    # 保存轨迹
+    if args.save_trajectories and trainer.debug_trajectories:
+        from src.training.rl_debug import save_trajectories
+        save_trajectories(trainer.debug_trajectories, args.save_trajectories)
 
 
 if __name__ == "__main__":
