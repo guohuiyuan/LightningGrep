@@ -229,21 +229,31 @@ def main():
     
     # 训练参数
     parser.add_argument("--epochs", type=int, default=3, help="训练轮数")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
-    parser.add_argument("--gradient_accumulation", type=int, default=4, help="梯度累积步数")
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
+    parser.add_argument("--gradient_accumulation", type=int, default=8, help="梯度累积步数")
     parser.add_argument("--learning_rate", type=float, default=2e-4, help="学习率")
-    parser.add_argument("--max_length", type=int, default=4096, help="最大序列长度")
+    parser.add_argument("--max_length", type=int, default=1024, help="最大序列长度")
     
     # LoRA 参数
-    parser.add_argument("--lora_r", type=int, default=64, help="LoRA rank")
-    parser.add_argument("--lora_alpha", type=int, default=128, help="LoRA alpha")
+    parser.add_argument("--lora_r", type=int, default=16, help="LoRA rank")
+    parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha")
     parser.add_argument("--lora_dropout", type=float, default=0.05, help="LoRA dropout")
     
     # 其他
     parser.add_argument("--dry_run", action="store_true", help="只打印配置，不训练")
     parser.add_argument("--resume", action="store_true", help="从最新 checkpoint 断点续训")
+    parser.add_argument("--low_memory", action="store_true", help="低显存模式 (8GB 显卡)")
     
     args = parser.parse_args()
+    
+    # 低显存模式覆盖参数
+    if args.low_memory:
+        args.batch_size = 1
+        args.gradient_accumulation = 16
+        args.max_length = 512
+        args.lora_r = 8
+        args.lora_alpha = 16
+        print("⚠️ 低显存模式已启用！")
     
     print("=" * 50)
     print("QLoRA SFT 训练")
@@ -326,6 +336,11 @@ def main():
     
     model = prepare_model_for_kbit_training(model)
     
+    # 低显存模式：启用梯度检查点
+    if args.low_memory:
+        model.gradient_checkpointing_enable()
+        print("  [低显存] 梯度检查点已启用")
+    
     # 配置 LoRA
     lora_config = LoraConfig(
         r=args.lora_r,
@@ -360,11 +375,14 @@ def main():
         load_best_model_at_end=True if val_dataset else False,  # 加载最好的模型
         metric_for_best_model="eval_loss",  # 用 eval_loss 判断
         greater_is_better=False,  # loss 越小越好
-        bf16=True,
+        bf16=not args.low_memory,  # 低显存模式用 fp16
+        fp16=args.low_memory,
         optim="paged_adamw_8bit",
         report_to="tensorboard",
         logging_dir=f"{args.output_dir}/logs",
         remove_unused_columns=False,
+        gradient_checkpointing=args.low_memory,  # 低显存模式启用
+        dataloader_pin_memory=not args.low_memory,  # 低显存模式禁用
     )
     
     # Data collator
