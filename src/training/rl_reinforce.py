@@ -50,6 +50,7 @@ class Trajectory:
     ground_truth_files: List[str]
     reward: float
     log_probs: List[torch.Tensor]  # 每个 token 的 log prob
+    format_error: bool = False  # 是否有格式错误
     
 
 def compute_log_probs(
@@ -141,7 +142,23 @@ def generate_trajectory(
             all_log_probs.append(token_log_probs)
         
         # 解析 tool calls
-        tool_calls = parse_tool_calls(generated_text)
+        tool_calls, format_error = parse_tool_calls(generated_text)
+        
+        if format_error:
+            # 格式错误，给 0 reward 并结束 (SWE-grep 的做法)
+            messages.append({"role": "assistant", "content": generated_text})
+            return Trajectory(
+                instance_id="",
+                query=query,
+                messages=messages,
+                tool_calls_count=env.total_tool_calls,
+                turns=env.current_turn,
+                files_found=list(env.files_found),
+                ground_truth_files=ground_truth_files,
+                reward=0.0,  # 格式错误 = 0 reward
+                log_probs=all_log_probs,
+                format_error=True,
+            )
         
         if not tool_calls:
             # 没有 tool calls，认为搜索结束
@@ -182,12 +199,17 @@ def generate_trajectory(
         ground_truth_files=ground_truth_files,
         reward=reward,
         log_probs=all_log_probs,
+        format_error=False,
     )
 
 
-def parse_tool_calls(text: str) -> List[Dict]:
-    """从生成文本中解析 tool calls"""
+def parse_tool_calls(text: str) -> Tuple[List[Dict], bool]:
+    """
+    从生成文本中解析 tool calls
+    Returns: (tool_calls, has_format_error)
+    """
     tool_calls = []
+    has_format_error = False
     
     # 尝试解析 JSON 格式的 tool calls
     # 格式: <tool_calls>[{...}]</tool_calls>
@@ -195,19 +217,20 @@ def parse_tool_calls(text: str) -> List[Dict]:
     pattern = r'<tool_calls>\s*(.*?)\s*</tool_calls>'
     matches = re.findall(pattern, text, re.DOTALL)
     
-    for match in matches:
-        try:
-            calls = json.loads(match)
-            if isinstance(calls, list):
-                tool_calls.extend(calls)
-            elif isinstance(calls, dict):
-                tool_calls.append(calls)
-        except json.JSONDecodeError:
-            pass
+    if matches:
+        for match in matches:
+            try:
+                calls = json.loads(match)
+                if isinstance(calls, list):
+                    tool_calls.extend(calls)
+                elif isinstance(calls, dict):
+                    tool_calls.append(calls)
+            except json.JSONDecodeError:
+                has_format_error = True  # JSON 解析失败
     
     # 也尝试解析函数调用格式
     # 格式: {"name": "grep", "arguments": {...}}
-    if not tool_calls:
+    if not tool_calls and not has_format_error:
         try:
             # 尝试直接解析整个文本为 JSON
             data = json.loads(text)
@@ -218,7 +241,15 @@ def parse_tool_calls(text: str) -> List[Dict]:
         except:
             pass
     
-    return tool_calls
+    # 验证 tool calls 格式
+    valid_calls = []
+    for call in tool_calls:
+        if isinstance(call, dict) and "name" in call:
+            valid_calls.append(call)
+        else:
+            has_format_error = True
+    
+    return valid_calls, has_format_error
 
 
 def compute_advantages(rewards: List[float]) -> List[float]:
