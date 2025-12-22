@@ -182,7 +182,7 @@ def main():
     parser.add_argument("--val_data", type=str, default=None, help="验证数据路径")
     
     # 模型参数
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen2.5-1.5B-Instruct",
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-1.7B-Instruct",
                         help="基座模型")
     parser.add_argument("--output_dir", type=str, default="./outputs/sft", help="输出目录")
     

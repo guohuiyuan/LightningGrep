@@ -84,7 +84,7 @@ python src/data_synthesis/convert_to_sft.py data/synthetic/raw_5k.json --split 0
 python src/training/sft_qlora.py \
     --train_data data/synthetic/raw_5k_train.json \
     --val_data data/synthetic/raw_5k_val.json \
-    --model_name Qwen/Qwen2.5-1.5B-Instruct \
+    --model_name Qwen/Qwen3-1.7B-Instruct \
     --epochs 3 \
     --mask_info \
     --output_dir outputs/sft_v1
