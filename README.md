@@ -122,7 +122,9 @@ LightningGrep/
 
 ### 目标
 
-用 **1.7B 小模型** 复现 SWE-grep 的并行检索能力，在 HotpotQA 上验证方法有效性。
+受 [SWE-grep](https://www.cognition.ai/blog/swe-grep) 启发，用 **1.7B 小模型** 实现并行检索能力。
+
+> ⚠️ 注意：这不是 SWE-grep 的复现（他们未开源），而是受其启发的独立实现。
 
 ### 阶段规划
 
@@ -146,12 +148,12 @@ LightningGrep/
 - [ ] RL 训练脚本开发
 - [ ] RL 训练 + 评测
 
-## �📊 评测指标
+## 评测指标
 
 | 指标 | 说明 | 目标 |
 |------|------|------|
-| **EM** | 答案完全匹配 | > 35% |
-| **F1** | 答案词级 F1 | > 45% |
+| **Recall** | 召回率（返回的位置覆盖 GT）| > 80% |
+| **Precision** | 精确率（返回的位置相关性）| > 70% |
 | **Avg Rounds** | 平均搜索轮数 | < 2.5 |
 | **Parallel Rate** | 并行搜索比例 | > 50% |
 
@@ -169,12 +171,28 @@ LightningGrep/
 ### 训练流程
 
 ```
-SFT（格式学习）→ RL（策略优化）
+SFT（格式 + 基础能力）
+  │
+  │  使用合成数据，教模型：
+  │  - 输出格式（<think>, <search>, <result>）
+  │  - 并行/串行判断
+  │  - 基本搜索策略
+  │
+  ▼
+RL（策略优化）
+  │
+  │  与真实搜索环境交互，优化：
+  │  - 搜索精准度
+  │  - 结果筛选能力
+  │  - 效率（减少轮数）
+  │
+  ▼
+最终模型
 ```
 
 ### 核心技术
 
-基于 [SWE-grep](https://cognition.ai/blog/swe-grep) 公开的方法：
+受 [SWE-grep](https://www.cognition.ai/blog/swe-grep) 博客启发：
 
 - **Policy Gradient** + Per-Sequence Importance Sampling
 - **Leave-One-Out Baseline**
@@ -185,10 +203,10 @@ SFT（格式学习）→ RL（策略优化）
 
 ## 📚 参考
 
-- [SWE-grep Blog](https://www.cognition.ai/blog/swe-grep) - Windsurf 的并行检索方法
-- [ParallelSearch](https://arxiv.org/abs/2406.xxxxx) - 并行查询分解
-- [Search-R1](https://arxiv.org/abs/2503.xxxxx) - 纯 RL 检索模型
-- [GAP](https://arxiv.org/abs/2406.xxxxx) - Grounded Answer with Provenance
+- [SWE-grep Blog](https://www.cognition.ai/blog/swe-grep) - Windsurf 的并行检索方法（未开源）
+- [Search-R1](https://github.com/PeterGriffinJin/Search-R1) - 开源 RL 检索模型
+- [ParallelSearch](https://arxiv.org/abs/2508.09303) - 并行查询分解（代码未公开）
+- [HotpotQA](https://hotpotqa.github.io/) - 多跳问答数据集
 
 ## 📝 License
 
