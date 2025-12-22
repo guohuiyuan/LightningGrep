@@ -50,6 +50,7 @@ echo "[4/4] 开始训练..."
 echo "============================================"
 echo ""
 
+# 模型会自动从 HuggingFace 下载 (~3.5GB)
 python src/training/sft_qlora.py \
     --train_data "$TRAIN_DATA" \
     --val_data "$VAL_DATA" \

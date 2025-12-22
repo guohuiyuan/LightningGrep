@@ -223,7 +223,7 @@ def main():
     parser.add_argument("--early_stopping_patience", type=int, default=3, help="Early stopping patience")
     
     # 模型参数
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-1.7B-Instruct",
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-1.7B",
                         help="基座模型")
     parser.add_argument("--output_dir", type=str, default="./outputs/sft", help="输出目录")
     
