@@ -158,6 +158,8 @@ class RepoManager:
     
     def _scan_existing(self):
         """扫描已克隆的仓库"""
+        if not self.cache_dir.exists():
+            return
         for repo_dir in self.cache_dir.iterdir():
             if repo_dir.is_dir() and (repo_dir / ".git").exists():
                 self.cloned_repos.add(repo_dir.name)
@@ -710,8 +712,38 @@ def main():
                 state = json.load(f)
             start_step = state["step"]
             print(f"  从 checkpoint 继续: step {start_step}")
-            # 加载 checkpoint 的 LoRA 权重
-            model = PeftModel.from_pretrained(model.base_model, args.resume)
+            
+            # 重新加载模型：基座 + checkpoint LoRA（不需要再创建新 LoRA）
+            if args.quantization == "4bit":
+                base_model = AutoModelForCausalLM.from_pretrained(
+                    args.base_model,
+                    quantization_config=bnb_config,
+                    device_map="auto",
+                    trust_remote_code=True,
+                )
+            elif args.quantization == "8bit":
+                base_model = AutoModelForCausalLM.from_pretrained(
+                    args.base_model,
+                    quantization_config=bnb_config,
+                    device_map="auto",
+                    trust_remote_code=True,
+                )
+            else:
+                base_model = AutoModelForCausalLM.from_pretrained(
+                    args.base_model,
+                    torch_dtype=compute_dtype,
+                    device_map="auto",
+                    trust_remote_code=True,
+                )
+            
+            # 先合并 SFT LoRA
+            sft_model = PeftModel.from_pretrained(base_model, args.sft_model)
+            merged_model = sft_model.merge_and_unload()
+            
+            # 加载 checkpoint 的 RL LoRA
+            model = PeftModel.from_pretrained(merged_model, args.resume)
+            model.print_trainable_parameters()
+            
             # 检查 optimizer 状态
             if (resume_path / "optimizer.pt").exists():
                 resume_optimizer_path = resume_path / "optimizer.pt"
