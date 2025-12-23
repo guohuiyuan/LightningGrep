@@ -410,12 +410,30 @@ class SimpleRLTrainer:
             # 保存 checkpoint
             if step % save_every == 0:
                 save_path = output_path / f"checkpoint-{step}"
+                save_path.mkdir(parents=True, exist_ok=True)
+                
+                # 1. 保存模型
                 self.model.save_pretrained(save_path)
                 self.tokenizer.save_pretrained(save_path)
-                # 保存训练状态
-                state = {"step": step, "total_reward": total_reward}
+                
+                # 2. 保存 optimizer 状态
+                torch.save(self.optimizer.state_dict(), save_path / "optimizer.pt")
+                
+                # 3. 保存训练状态
+                state = {
+                    "step": step,
+                    "total_reward": total_reward,
+                    "avg_reward": total_reward / (step - start_step) if step > start_step else 0,
+                }
                 with open(save_path / "train_state.json", "w") as f:
-                    json.dump(state, f)
+                    json.dump(state, f, indent=2)
+                
+                # 4. 只保留最近 3 个 checkpoint（节省空间）
+                all_ckpts = sorted(output_path.glob("checkpoint-*"), key=lambda x: int(x.name.split("-")[1]))
+                for old_ckpt in all_ckpts[:-3]:
+                    import shutil
+                    shutil.rmtree(old_ckpt)
+                
                 print(f"\n  保存: {save_path}")
         
         pbar.close()
@@ -581,6 +599,7 @@ def main():
     
     # 检查是否从 checkpoint 继续
     start_step = 0
+    resume_optimizer_path = None
     if args.resume:
         resume_path = Path(args.resume)
         state_file = resume_path / "train_state.json"
@@ -591,6 +610,10 @@ def main():
             print(f"  从 checkpoint 继续: step {start_step}")
             # 加载 checkpoint 的 LoRA 权重
             model = PeftModel.from_pretrained(model.base_model, args.resume)
+            # 检查 optimizer 状态
+            if (resume_path / "optimizer.pt").exists():
+                resume_optimizer_path = resume_path / "optimizer.pt"
+                print(f"  加载 optimizer 状态")
         else:
             print(f"  ⚠️ 未找到 train_state.json，从头开始")
     
@@ -603,6 +626,10 @@ def main():
         max_turns=args.max_turns,
         temperature=args.temperature,
     )
+    
+    # 加载 optimizer 状态
+    if resume_optimizer_path:
+        trainer.optimizer.load_state_dict(torch.load(resume_optimizer_path))
     
     # 调试模式
     if args.debug:
