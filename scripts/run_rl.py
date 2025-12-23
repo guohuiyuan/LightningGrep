@@ -181,20 +181,21 @@ class RepoManager:
     
     def _clone_repo(self, repo: str, repo_path: Path):
         """克隆仓库（支持镜像和重试）"""
-        # GitHub 镜像列表（国内访问）
+        # GitHub 镜像列表（国内优先）
         mirrors = [
-            f"https://github.com/{repo}.git",  # 原始
-            f"https://ghproxy.com/https://github.com/{repo}.git",  # ghproxy 镜像
+            f"https://ghproxy.com/https://github.com/{repo}.git",  # ghproxy 镜像（默认）
             f"https://gitclone.com/github.com/{repo}.git",  # gitclone 镜像
+            f"https://github.com/{repo}.git",  # 原始 GitHub（最后尝试）
         ]
         
         print(f"  克隆仓库: {repo}...")
         
         for i, url in enumerate(mirrors):
             try:
-                mirror_name = "GitHub" if i == 0 else f"镜像{i}"
+                mirror_names = ["ghproxy镜像", "gitclone镜像", "GitHub原始"]
+                mirror_name = mirror_names[i] if i < len(mirror_names) else f"镜像{i}"
                 if i > 0:
-                    print(f"  尝试 {mirror_name}: {url[:50]}...")
+                    print(f"  尝试 {mirror_name}...")
                 
                 subprocess.run(
                     ["git", "clone", "--depth", "100", url, str(repo_path)],
