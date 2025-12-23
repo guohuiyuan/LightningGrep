@@ -11,7 +11,7 @@ import json
 import subprocess
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 # 添加项目路径
@@ -32,17 +32,53 @@ def load_swebench_data(split: str = "lite", cache_dir: str = "data/swebench"):
     """从 HuggingFace 加载 SWE-Bench 数据"""
     cache_file = Path(cache_dir) / f"{split}.json"
     
+    # 优先使用本地缓存
     if cache_file.exists():
         print(f"  从缓存加载: {cache_file}")
         with open(cache_file, "r") as f:
             return json.load(f)
     
+    # 检查预处理的数据文件
+    local_files = {
+        "lite": Path(cache_dir) / "lite_all.json",
+        "verified": Path(cache_dir) / "verified_all.json",
+    }
+    if split in local_files and local_files[split].exists():
+        print(f"  从本地文件加载: {local_files[split]}")
+        with open(local_files[split], "r", encoding="utf-8") as f:
+            raw_data = json.load(f)
+        
+        # 转换字段名（兼容不同格式）
+        data = []
+        for item in raw_data:
+            data.append({
+                "instance_id": item.get("instance_id", ""),
+                "repo": item.get("repo", ""),
+                "base_commit": item.get("base_commit", ""),
+                "problem_statement": item.get("problem_statement") or item.get("query", ""),
+                "patch": item.get("patch", ""),
+                "hints_text": item.get("hints_text", ""),
+            })
+        return data
+    
     print(f"  从 HuggingFace 下载 SWE-Bench {split}...")
     
-    if split == "lite":
-        dataset = load_dataset("princeton-nlp/SWE-bench_Lite", split="test")
-    else:
-        dataset = load_dataset("princeton-nlp/SWE-bench", split="test")
+    # 尝试使用镜像（国内访问）
+    try:
+        os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    except:
+        pass
+    
+    try:
+        if split == "lite":
+            dataset = load_dataset("princeton-nlp/SWE-bench_Lite", split="test")
+        else:
+            dataset = load_dataset("princeton-nlp/SWE-bench", split="test")
+    except Exception as e:
+        print(f"\n  ⚠️ 无法下载数据集: {e}")
+        print(f"  请手动下载并放到: {cache_file}")
+        print(f"  或设置环境变量: export HF_ENDPOINT=https://hf-mirror.com")
+        raise
     
     data = []
     for item in dataset:
