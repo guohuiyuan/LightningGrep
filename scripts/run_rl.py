@@ -180,19 +180,50 @@ class RepoManager:
         return repo_path
     
     def _clone_repo(self, repo: str, repo_path: Path):
-        """克隆仓库"""
-        url = f"https://github.com/{repo}.git"
+        """克隆仓库（支持镜像和重试）"""
+        # GitHub 镜像列表（国内访问）
+        mirrors = [
+            f"https://github.com/{repo}.git",  # 原始
+            f"https://ghproxy.com/https://github.com/{repo}.git",  # ghproxy 镜像
+            f"https://gitclone.com/github.com/{repo}.git",  # gitclone 镜像
+        ]
+        
         print(f"  克隆仓库: {repo}...")
         
-        try:
-            subprocess.run(
-                ["git", "clone", "--depth", "100", url, str(repo_path)],
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as e:
-            print(f"  ⚠️ 克隆失败: {e.stderr.decode()}")
-            raise
+        for i, url in enumerate(mirrors):
+            try:
+                mirror_name = "GitHub" if i == 0 else f"镜像{i}"
+                if i > 0:
+                    print(f"  尝试 {mirror_name}: {url[:50]}...")
+                
+                subprocess.run(
+                    ["git", "clone", "--depth", "100", url, str(repo_path)],
+                    check=True,
+                    capture_output=True,
+                    timeout=300,  # 5分钟超时
+                )
+                print(f"  ✅ 克隆成功")
+                return  # 成功就返回
+                
+            except subprocess.TimeoutExpired:
+                print(f"  ⚠️ 超时，尝试下一个镜像...")
+                # 清理失败的目录
+                if repo_path.exists():
+                    import shutil
+                    shutil.rmtree(repo_path, ignore_errors=True)
+                continue
+                
+            except subprocess.CalledProcessError as e:
+                error_msg = e.stderr.decode() if e.stderr else str(e)
+                print(f"  ⚠️ 失败: {error_msg[:100]}...")
+                # 清理失败的目录
+                if repo_path.exists():
+                    import shutil
+                    shutil.rmtree(repo_path, ignore_errors=True)
+                continue
+        
+        # 所有镜像都失败
+        raise RuntimeError(f"无法克隆仓库 {repo}，请检查网络或手动克隆到 {repo_path}")
     
     def _checkout_commit(self, repo_path: Path, commit: str):
         """切换到指定 commit"""
