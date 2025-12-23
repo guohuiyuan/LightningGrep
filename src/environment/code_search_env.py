@@ -238,13 +238,17 @@ class CodeSearchEnv:
     def compute_reward(
         self,
         ground_truth_files: List[str],
+        ground_truth_lines: Dict[str, List[Tuple[int, int]]] = None,
         beta: float = 0.5
     ) -> float:
         """
         计算 reward (Weighted F1, β=0.5 偏向 Precision)
         
+        博客设计: reward = (file_f1 + line_f1) / 2
+        
         Args:
             ground_truth_files: 真实需要找到的文件
+            ground_truth_lines: 真实需要找到的行范围 {file: [(start, end), ...]}
             beta: F-beta 的 beta 值，<1 偏向 precision，>1 偏向 recall
         
         Returns:
@@ -253,6 +257,19 @@ class CodeSearchEnv:
         if not ground_truth_files:
             return 0.0
         
+        # 1. 文件级 F1
+        file_f1 = self._compute_file_f1(ground_truth_files, beta)
+        
+        # 2. 行级 F1（如果有 ground truth）
+        if ground_truth_lines:
+            line_f1 = self._compute_line_f1(ground_truth_lines, beta)
+            # 博客: 文件和行的平均
+            return (file_f1 + line_f1) / 2
+        
+        return file_f1
+    
+    def _compute_file_f1(self, ground_truth_files: List[str], beta: float) -> float:
+        """计算文件级 F-beta"""
         gt_set = set(ground_truth_files)
         found_set = self.files_found
         
@@ -267,11 +284,45 @@ class CodeSearchEnv:
         if precision + recall == 0:
             return 0.0
         
-        # F-beta score
         beta_sq = beta ** 2
-        f_beta = (1 + beta_sq) * (precision * recall) / (beta_sq * precision + recall)
+        return (1 + beta_sq) * (precision * recall) / (beta_sq * precision + recall)
+    
+    def _compute_line_f1(
+        self, 
+        ground_truth_lines: Dict[str, List[Tuple[int, int]]], 
+        beta: float
+    ) -> float:
+        """
+        计算行级 F-beta
         
-        return f_beta
+        使用行覆盖率：预测的行范围与 ground truth 行范围的重叠
+        """
+        # 将行范围转换为行集合
+        gt_lines = set()
+        for file, ranges in ground_truth_lines.items():
+            for start, end in ranges:
+                for line in range(start, end + 1):
+                    gt_lines.add((file, line))
+        
+        found_lines = set()
+        for file, ranges in self.lines_found.items():
+            for start, end in ranges:
+                for line in range(start, end + 1):
+                    found_lines.add((file, line))
+        
+        if not found_lines or not gt_lines:
+            return 0.0
+        
+        correct = len(gt_lines & found_lines)
+        
+        precision = correct / len(found_lines) if found_lines else 0
+        recall = correct / len(gt_lines) if gt_lines else 0
+        
+        if precision + recall == 0:
+            return 0.0
+        
+        beta_sq = beta ** 2
+        return (1 + beta_sq) * (precision * recall) / (beta_sq * precision + recall)
 
 
 # 工具定义（供模型使用）

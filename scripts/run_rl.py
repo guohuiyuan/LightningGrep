@@ -77,6 +77,38 @@ def parse_patch_files(patch: str) -> List[str]:
     return files
 
 
+def parse_patch_lines(patch: str) -> Dict[str, List[Tuple[int, int]]]:
+    """
+    从 patch 中提取修改的文件和行范围
+    
+    Returns:
+        {file_path: [(start_line, end_line), ...]}
+    """
+    import re
+    
+    result = {}
+    current_file = None
+    
+    for line in patch.split("\n"):
+        # 新文件
+        if line.startswith("diff --git"):
+            parts = line.split()
+            if len(parts) >= 4:
+                current_file = parts[2][2:]  # 去掉 "a/"
+                result[current_file] = []
+        
+        # 行范围: @@ -42,6 +42,8 @@
+        elif line.startswith("@@") and current_file:
+            match = re.search(r'\+(\d+)(?:,(\d+))?', line)
+            if match:
+                start = int(match.group(1))
+                count = int(match.group(2)) if match.group(2) else 1
+                end = start + count - 1
+                result[current_file].append((start, end))
+    
+    return result
+
+
 # ========== 仓库管理 ==========
 
 class RepoManager:
@@ -148,36 +180,7 @@ class RepoManager:
             )
 
 
-# ========== 奖励计算 ==========
-
-def compute_reward(
-    predicted_files: List[str],
-    ground_truth_files: List[str],
-    beta: float = 0.5,
-) -> float:
-    """
-    计算 Weighted F1 奖励
-    beta < 1 偏向 Recall
-    """
-    if not predicted_files or not ground_truth_files:
-        return 0.0
-    
-    pred_set = set(predicted_files)
-    gt_set = set(ground_truth_files)
-    
-    correct = len(pred_set & gt_set)
-    
-    if correct == 0:
-        return 0.0
-    
-    precision = correct / len(pred_set)
-    recall = correct / len(gt_set)
-    
-    # Weighted F1
-    beta_sq = beta ** 2
-    f_beta = (1 + beta_sq) * (precision * recall) / (beta_sq * precision + recall)
-    
-    return f_beta
+# ========== 奖励计算（使用 env.compute_reward，支持文件+行级 F1）==========
 
 
 # ========== 简化版 RL 训练 ==========
@@ -253,7 +256,10 @@ class SimpleRLTrainer:
         )
         
         env = CodeSearchEnv(str(repo_path), max_turns=self.max_turns)
-        ground_truth = parse_patch_files(instance["patch"])
+        
+        # 解析 ground truth（文件 + 行）
+        ground_truth_files = parse_patch_files(instance["patch"])
+        ground_truth_lines = parse_patch_lines(instance["patch"])
         
         # 初始消息
         messages = [{"role": "user", "content": instance["problem_statement"]}]
@@ -281,15 +287,14 @@ class SimpleRLTrainer:
             if done:
                 break
         
-        # 计算奖励
-        files_found = list(env.files_found)
-        reward = compute_reward(files_found, ground_truth)
+        # 计算奖励（文件 + 行级 F1 的平均）
+        reward = env.compute_reward(ground_truth_files, ground_truth_lines)
         
         return Trajectory(
             instance_id=instance["instance_id"],
             query=instance["problem_statement"][:100],
-            files_found=files_found,
-            ground_truth=ground_truth,
+            files_found=list(env.files_found),
+            ground_truth=ground_truth_files,
             reward=reward,
             log_prob=total_log_prob,
         )
