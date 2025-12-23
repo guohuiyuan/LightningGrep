@@ -47,6 +47,82 @@ Final Result:
 └── src/error.py [12-15] - medium
 ```
 
+### 理想模型行为（完整示例）
+
+**输入 Prompt：**
+```
+Repository: django/django
+
+Directory structure:
+django/
+├── django/
+│   ├── contrib/
+│   ├── core/
+│   ├── db/
+│   └── http/
+├── tests/
+└── docs/
+
+Issue:
+When using HttpResponse with non-ASCII content, the server crashes 
+with "UnicodeDecodeError: 'ascii' codec can't decode byte 0xe4"
+```
+
+**模型第 1 轮（并行搜索 6 个关键词）：**
+```
+Let me search for HttpResponse encoding handling.
+
+<tool_calls>
+[
+  {"name": "grep", "arguments": {"query": "HttpResponse", "path": "django/http/"}},
+  {"name": "grep", "arguments": {"query": "encoding", "path": "django/http/"}},
+  {"name": "grep", "arguments": {"query": "UnicodeDecodeError", "path": "django/"}},
+  {"name": "grep", "arguments": {"query": "content.encode", "path": "django/"}},
+  {"name": "grep", "arguments": {"query": "charset", "path": "django/http/"}},
+  {"name": "glob", "arguments": {"pattern": "django/http/*.py"}}
+]
+</tool_calls>
+```
+
+**工具返回：**
+```
+django/http/response.py:42: class HttpResponse:
+django/http/response.py:156: self.content = content.encode(self.charset)
+django/core/handlers/base.py:89: raise UnicodeDecodeError...
+```
+
+**模型第 2 轮（深入查看关键文件）：**
+```
+Found encoding logic in response.py:156. Reading the relevant sections.
+
+<tool_calls>
+[
+  {"name": "read", "arguments": {"file": "django/http/response.py", "start": 150, "end": 180}},
+  {"name": "read", "arguments": {"file": "django/core/handlers/base.py", "start": 85, "end": 100}},
+  {"name": "grep", "arguments": {"query": "def content", "path": "django/http/response.py"}}
+]
+</tool_calls>
+```
+
+**最终结果：**
+```
+Files found:
+- django/http/response.py [150-165]: HttpResponse content encoding
+- django/core/handlers/base.py [85-95]: Exception handling
+
+The bug is in content.encode() at line 156.
+```
+
+### 训练前 vs 训练后对比
+
+| | 训练前（Base Model） | 训练后（LightningGrep） |
+|------|--------|--------|
+| **调用方式** | 串行，一个一个调用 | 并行，5-8 个同时调用 |
+| **搜索策略** | 盲目尝试 | 有针对性，覆盖多个关键词 |
+| **轮数** | 10-20 轮 | 3-4 轮 |
+| **速度** | 60+ 秒 | <5 秒 |
+| **找到的文件** | 可能找不全 | 精准定位 |
+
 ## 🚀 快速开始
 
 ### 1. 安装依赖
