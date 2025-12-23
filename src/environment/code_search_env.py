@@ -113,7 +113,11 @@ class CodeSearchEnv:
             return f"Error: {str(e)}"
     
     def _grep(self, query: str, path: str = ".") -> str:
-        """搜索文本"""
+        """
+        搜索文本，返回 文件:行号:内容 格式
+        
+        这样模型能看到匹配的具体内容，即使目录树没显示该文件
+        """
         if not query:
             return "Error: empty query"
         
@@ -122,22 +126,47 @@ class CodeSearchEnv:
             search_path = self.repo_path
         
         try:
-            # 使用 grep 或 ripgrep
-            cmd = ["rg", "-n", "-l", "--max-count", str(self.max_grep_results), query, str(search_path)]
+            # 使用 ripgrep，返回 文件:行号:内容
+            cmd = [
+                "rg", "-n",  # 显示行号
+                "--max-count", "3",  # 每个文件最多3个匹配
+                "-M", "200",  # 每行最多200字符
+                query, 
+                str(search_path)
+            ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             
             if result.returncode == 0 and result.stdout:
-                files = result.stdout.strip().split("\n")[:self.max_grep_results]
-                # 转换为相对路径
-                rel_files = []
-                for f in files:
-                    try:
-                        rel = Path(f).relative_to(self.repo_path)
-                        rel_files.append(str(rel))
-                        self.files_found.add(str(rel))
-                    except:
-                        rel_files.append(f)
-                return "\n".join(rel_files)
+                lines = result.stdout.strip().split("\n")[:self.max_grep_results]
+                
+                # 转换为相对路径并记录
+                output_lines = []
+                for line in lines:
+                    # 格式: /abs/path/file.py:42:content
+                    if ":" in line:
+                        parts = line.split(":", 2)
+                        if len(parts) >= 2:
+                            try:
+                                abs_path = Path(parts[0])
+                                rel_path = abs_path.relative_to(self.repo_path)
+                                self.files_found.add(str(rel_path))
+                                
+                                # 记录行号
+                                if len(parts) >= 2 and parts[1].isdigit():
+                                    line_num = int(parts[1])
+                                    if str(rel_path) not in self.lines_found:
+                                        self.lines_found[str(rel_path)] = []
+                                    self.lines_found[str(rel_path)].append((line_num, line_num))
+                                
+                                # 重新组合为相对路径
+                                content = parts[2] if len(parts) > 2 else ""
+                                output_lines.append(f"{rel_path}:{parts[1]}:{content}")
+                            except:
+                                output_lines.append(line)
+                    else:
+                        output_lines.append(line)
+                
+                return "\n".join(output_lines)
             else:
                 return "No matches found"
         except subprocess.TimeoutExpired:
@@ -145,10 +174,11 @@ class CodeSearchEnv:
         except FileNotFoundError:
             # fallback to grep
             try:
-                cmd = ["grep", "-r", "-n", "-l", query, str(search_path)]
+                cmd = ["grep", "-r", "-n", query, str(search_path)]
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
                 if result.stdout:
-                    return result.stdout.strip()
+                    lines = result.stdout.strip().split("\n")[:self.max_grep_results]
+                    return "\n".join(lines)
                 return "No matches found"
             except:
                 return "grep not available"
