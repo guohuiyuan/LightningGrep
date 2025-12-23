@@ -360,19 +360,24 @@ class SimpleRLTrainer:
         eval_every: int = 20,
         save_every: int = 50,
         output_dir: str = "outputs/rl_v1",
+        start_step: int = 0,
     ):
         """训练循环"""
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         
-        print(f"\n开始 RL 训练: {num_steps} steps")
+        # 日志文件
+        log_file = output_path / "training_log.jsonl"
+        
+        print(f"\n开始 RL 训练: {num_steps} steps (从 step {start_step} 开始)")
         print(f"  Batch size: {batch_size}")
         print(f"  Rollouts per instance: {self.num_rollouts}")
+        print(f"  日志文件: {log_file}")
         
-        step = 0
+        step = start_step
         total_reward = 0
         
-        pbar = tqdm(total=num_steps, desc="Training")
+        pbar = tqdm(total=num_steps, initial=start_step, desc="Training")
         
         while step < num_steps:
             # 随机采样 batch
@@ -388,14 +393,29 @@ class SimpleRLTrainer:
             pbar.update(1)
             pbar.set_postfix({
                 "reward": f"{stats['reward']:.3f}",
-                "avg": f"{total_reward/step:.3f}",
+                "avg": f"{total_reward/(step-start_step):.3f}",
             })
             
-            # 保存
+            # 记录日志
+            log_entry = {
+                "step": step,
+                "reward": stats["reward"],
+                "avg_reward": total_reward / (step - start_step),
+                "loss": stats.get("loss", 0),
+                "num_trajectories": stats.get("num_trajectories", 0),
+            }
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(log_entry) + "\n")
+            
+            # 保存 checkpoint
             if step % save_every == 0:
                 save_path = output_path / f"checkpoint-{step}"
                 self.model.save_pretrained(save_path)
                 self.tokenizer.save_pretrained(save_path)
+                # 保存训练状态
+                state = {"step": step, "total_reward": total_reward}
+                with open(save_path / "train_state.json", "w") as f:
+                    json.dump(state, f)
                 print(f"\n  保存: {save_path}")
         
         pbar.close()
@@ -450,6 +470,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument("--save_every", type=int, default=50, help="每N步保存一次")
     parser.add_argument("--debug", action="store_true", help="调试模式：打印详细信息")
+    parser.add_argument("--resume", type=str, default=None, help="从 checkpoint 继续训练，如 outputs/rl_v1/checkpoint-100")
     
     args = parser.parse_args()
     
@@ -557,6 +578,22 @@ def main():
     
     # 4. 训练
     print("\n[4/4] 开始 RL 训练...")
+    
+    # 检查是否从 checkpoint 继续
+    start_step = 0
+    if args.resume:
+        resume_path = Path(args.resume)
+        state_file = resume_path / "train_state.json"
+        if state_file.exists():
+            with open(state_file, "r") as f:
+                state = json.load(f)
+            start_step = state["step"]
+            print(f"  从 checkpoint 继续: step {start_step}")
+            # 加载 checkpoint 的 LoRA 权重
+            model = PeftModel.from_pretrained(model.base_model, args.resume)
+        else:
+            print(f"  ⚠️ 未找到 train_state.json，从头开始")
+    
     trainer = SimpleRLTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -577,6 +614,7 @@ def main():
         batch_size=args.batch_size,
         output_dir=args.output_dir,
         save_every=args.save_every,
+        start_step=start_step,
     )
     
     # 打印完成信息
